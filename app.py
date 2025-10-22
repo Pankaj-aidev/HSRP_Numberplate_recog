@@ -16,9 +16,9 @@ import os
 import matplotlib.pyplot as plt
 
 # ============================================================
-# 0️⃣ Paths
+# 0️⃣ Paths (relative to repo root)
 # ============================================================
-BASE_PATH = "/content/drive/MyDrive/Colab Notebooks/HSRP"
+BASE_PATH = "assets"
 MODEL_PATH = os.path.join(BASE_PATH, "model.h5")
 CASCADE_PATH = os.path.join(BASE_PATH, "indian_license_plate.xml")
 
@@ -27,6 +27,9 @@ CASCADE_PATH = os.path.join(BASE_PATH, "indian_license_plate.xml")
 # ============================================================
 @st.cache_resource
 def load_model_cached():
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"❌ Model not found at {MODEL_PATH}")
+        return None
     model = tf.keras.models.load_model(MODEL_PATH, compile=False)
     return model
 
@@ -36,15 +39,14 @@ model = load_model_cached()
 # 2️⃣ Utility function to fix dimensions
 # ============================================================
 def fix_dimension(img):
-    """Convert single-channel grayscale image to 3-channel RGB."""
     return np.stack([img]*3, axis=-1)
 
 # ============================================================
 # 3️⃣ Load Haar Cascade
 # ============================================================
+if not os.path.exists(CASCADE_PATH):
+    st.error(f"❌ Cascade XML not found at {CASCADE_PATH}")
 plate_cascade = cv2.CascadeClassifier(CASCADE_PATH)
-if plate_cascade.empty():
-    st.error("❌ Cascade XML not loaded correctly!")
 
 # ============================================================
 # 4️⃣ Detect license plate (with rectangle)
@@ -56,20 +58,20 @@ def detect_plate(img, text=''):
 
     plate = None
     for (x, y, w, h) in plate_rect:
-        pad = 2  # reduced from 5 to 2 for tighter rectangle
+        pad = 3  # slightly smaller rectangle
         x1 = max(x - pad, 0)
         y1 = max(y - pad, 0)
         x2 = min(x + w + pad, img.shape[1])
         y2 = min(y + h + pad, img.shape[0])
         plate = roi[y1:y2, x1:x2, :]
-        # Draw rectangle
-        cv2.rectangle(plate_img, (x1, y1), (x2, y2), (51, 181, 155), 3)
+        cv2.rectangle(plate_img, (x1, y1), (x2, y2), (51, 181, 155), 2)
         if text != '':
-            plate_img = cv2.putText(plate_img, text, (x1, y1-5),
-                                    cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.7, (51,181,155), 1, cv2.LINE_AA)
+            cv2.putText(plate_img, text, (x1, y1-5),
+                        cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.7, (51,181,155), 1, cv2.LINE_AA)
     return plate_img, plate
+
 # ============================================================
-# 5️⃣ Find contours for character segmentation (with visualization)
+# 5️⃣ Find contours for character segmentation
 # ============================================================
 def find_contours(dimensions, img):
     cntrs, _ = cv2.findContours(img.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -89,10 +91,8 @@ def find_contours(dimensions, img):
             char = cv2.subtract(255, char)
             char_copy[2:42, 2:22] = char
             img_res.append(char_copy)
-            # Draw rectangle for visualization
             cv2.rectangle(img_copy, (intX, intY), (intX+intWidth, intY+intHeight), (50, 21, 200), 1)
 
-    # Show contours
     plt.figure(figsize=(10,4))
     plt.imshow(img_copy, cmap='gray')
     plt.axis('off')
@@ -122,7 +122,6 @@ def segment_characters(image):
     LP_WIDTH, LP_HEIGHT = img_binary_lp.shape
     dimensions = [LP_WIDTH/6, LP_WIDTH/2, LP_HEIGHT/10, 2*LP_HEIGHT/3]
 
-    # Show binary plate
     plt.figure(figsize=(10,4))
     plt.imshow(img_binary_lp, cmap='gray')
     plt.axis('off')
@@ -132,9 +131,11 @@ def segment_characters(image):
     return find_contours(dimensions, img_binary_lp)
 
 # ============================================================
-# 7️⃣ Predict characters using model
+# 7️⃣ Predict characters
 # ============================================================
 def predict_license_number(char_images):
+    if model is None:
+        return "Model not loaded"
     characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     dic = {i: c for i, c in enumerate(characters)}
     output = []
@@ -146,7 +147,7 @@ def predict_license_number(char_images):
     return ''.join(output)
 
 # ============================================================
-# 8️⃣ Display helper for Streamlit
+# 8️⃣ Display helper
 # ============================================================
 def display_image(img_, title=''):
     img_rgb = cv2.cvtColor(img_, cv2.COLOR_BGR2RGB)
@@ -169,22 +170,17 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, 1)
-
-    # Show original image
     display_image(img, "Uploaded Image")
 
-    # Detect plate
     detected_img, plate = detect_plate(img)
     display_image(detected_img, "Detected License Plate Region")
 
     if plate is not None:
-        # Segment characters
         char_images = segment_characters(plate)
         if len(char_images) > 0:
-            # Predict plate text
             plate_number = predict_license_number(char_images)
             st.markdown(f"### 🔢 Predicted License Plate: **{plate_number}**")
-            # Show segmented characters
+
             st.write("Segmented Characters:")
             plt.figure(figsize=(12,2))
             for i, c in enumerate(char_images):
